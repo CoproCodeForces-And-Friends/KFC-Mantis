@@ -36,15 +36,27 @@
                {:content-type "application/soap+xml"
                 :body (xml/emit-str (build-xml method params))}))
 
-(defn convert-html [http]
+(defn convert-http [http]
   (-> http :body string->stream xml/parse))
 
-(defn fetch-mantis [host _]
-  (log/info "Fetching data...")
-  (convert-html
+(defn get-mantis-data [host page]
+  (convert-http
    (get-data host "mc_filter_search_issues" {:username "administrator"
                                              :password "root"
-                                             :per-page -1})))
+                                             :per_page 1
+                                             :page_number page})))
+(defn issues-lazy-seq
+  ([host] (issues-lazy-seq host "" 1))
+  ([host prev p]
+   (let [cur-page (get-mantis-data host p)]
+     (if (= cur-page prev)
+       nil
+       (lazy-seq (cons cur-page (issues-lazy-seq host cur-page (inc p))))))))
+
+(defn fetch-mantis [host _]
+  "Returns pages lazily"
+  (log/info "Fetching data...")
+  (issues-lazy-seq host))
 
 (defn val-by-tag [data tg]
   (:content (first (filter #(= (:tag %) tg) data))))
@@ -68,13 +80,16 @@
      :projectId (first (val-by-tag (v :project) :id))
      :relatedTasks (map rel-xf (v :relationships))}))
 
-(defn transform-issues [data]
+(defn transform-issues-page [data]
   (let [issues (-> data :content first :content first :content first :content)]
     (log/info "Transforming" (count issues) "issues from Mantis")
-    (map issue-xf issues)))
+    (issue-xf (first issues))))
+
+(defn transform-issues [data]
+  (map transform-issues-page data))
 
 (defn send-data [host data]
-  (log/info "sending data..." data)
+  (log/info "sending data..." (:id data))
   (client/post host
                {:content-type :json
                 :form-params data}))
@@ -92,7 +107,7 @@
 (defn send-one-by-one [host data]
   (doall
    (->> data
-        (filter crop-date)
+        (take-while crop-date)
         log-empty
         (map (partial send-data host)))))
 
