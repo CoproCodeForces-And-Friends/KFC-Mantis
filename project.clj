@@ -6,6 +6,7 @@
   :dependencies [[org.clojure/clojure "1.8.0"]
                  [org.clojure/data.xml "0.0.8"]
                  [environ "1.1.0"]
+                 [clj-time "0.14.2"]
                  [cheshire "5.8.0"]
                  [org.clojure/tools.logging "0.4.0"]
                  [clj-http "3.7.0"]]

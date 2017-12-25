@@ -2,10 +2,15 @@
   (:require [clojure.data.xml :as xml]
             [environ.core :refer [env]]
             [clj-http.client :as client]
+            [clj-time.core :as t]
+            [clj-time.local :as tl]
+            [clj-time.format :as tf]
             [clojure.java.io :as io]
             [clojure.tools.logging :as log])
   (:import (java.util.concurrent Executors TimeUnit))
   (:gen-class))
+
+(defonce last-sync (atom nil))
 
 (defn string->stream
   ([s] (string->stream s "UTF-8"))
@@ -55,6 +60,7 @@
      :name (first (v :summary))
      :description (first (v :description))
      :creationDate (first (v :date_submitted))
+     :lastUpdated (first (v :last_updated))
      :status (first (val-by-tag (v :status) :name))
      :due (first (v :due_date))
      :creatorId (first (val-by-tag (v :reporter) :id))
@@ -73,9 +79,22 @@
                {:content-type :json
                 :form-params data}))
 
+(defn crop-date [issue]
+  (let [lu-str (:lastUpdated issue)
+        lu (tf/parse lu-str)
+        ls @last-sync]
+    (or (nil? ls) (t/after? lu ls))))
+
+(defn log-empty [lst]
+  (when (empty? lst) (log/info "No updates"))
+  lst)
+
 (defn send-one-by-one [host data]
   (doall
-   (map (partial send-data host) data)))
+   (->> data
+        (filter crop-date)
+        log-empty
+        (map (partial send-data host)))))
 
 (defn agent-error-handler [name]
   (fn [_ ex]
@@ -88,14 +107,17 @@
   (let [pool (Executors/newScheduledThreadPool 1)]
     (.scheduleAtFixedRate pool
                           #(send-off job-agent callback)
-                          0 interval TimeUnit/MINUTES)))
+                          0 interval TimeUnit/SECONDS)))
+
+(defn set-last-sync [_]
+  (reset! last-sync (tl/local-now)))
 
 (defn -main
   [& args]
   (let [sender (partial send-one-by-one (env :storage-api))
-        interval (or (env :interval) 1)
+        interval (or (env :interval) 10)
         fetcher (partial fetch-mantis (env :mantis-api))]
     (log/info "Storage:" (env :storage-api))
     (log/info "Mantis:" (env :mantis-api))
     (log/info "Starting fetch job with" interval "minute(s) interval")
-    (start-job interval (comp sender transform-issues fetcher))))
+    (start-job interval (comp set-last-sync sender transform-issues fetcher))))
